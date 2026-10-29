@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "toljax"
+version = "0.5.0"
+description = "Headless, differentiable 3D GD&T variation analysis and inverse cost-tolerance synthesis engine in JAX"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "jax>=0.4.30",
+    "jaxlib>=0.4.30",
+    "numpy>=1.26.0",
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+    "scipy>=1.11.0",
+    "typer>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+toljax = "toljax.cli.app:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "bench_*.py"]
+addopts = "-v"

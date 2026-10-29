@@ -1,0 +1,130 @@
+schema_version: "1.0"
+assembly:
+  name: "EV_Battery_Busbar_Weld_Stack"
+  units: "mm"
+  default_process_sigma: 3.0
+  mmc_statistical_mode: "acceptance_truncated"
+
+parts:
+  - id: "housing"
+    fixed: true
+    step_file: "cad/housing.step"
+    nominal_pose:
+      pos: [0.0, 0.0, 0.0]
+      rpy_deg: [0.0, 0.0, 0.0]
+    features:
+      - id: "datum_A"
+        type: "planar"
+        step_face_tag: "FACE_DATUM_A"
+        nominal_frame:
+          pos: [0.0, 0.0, 10.0]
+          rpy_deg: [0.0, 0.0, 0.0]
+        bounds: {lx: 120.0, ly: 80.0}
+        gdt:
+          flatness: 0.05
+        cost_model: {base_a: 2.0, scale_b: 0.15, exponent: 2.0, bounds: [0.01, 0.25]}
+
+      - id: "pin_1"
+        type: "cylinder_pin"
+        nominal_frame:
+          pos: [20.0, 20.0, 16.0]
+          rpy_deg: [0.0, 0.0, 0.0]
+        size: {nom: 6.000, upper_dev: 0.000, lower_dev: -0.012}
+        length: 12.0
+        gdt:
+          position: 0.08
+          perpendicularity: 0.04
+          modifier: "MMC"
+          datum_refs: ["datum_A"]
+        cost_model: {base_a: 1.5, scale_b: 0.08, exponent: 2.0, bounds: [0.02, 0.30]}
+
+      - id: "pin_2"
+        type: "cylinder_pin"
+        nominal_frame:
+          pos: [100.0, 20.0, 16.0]
+          rpy_deg: [0.0, 0.0, 0.0]
+        size: {nom: 6.000, upper_dev: 0.000, lower_dev: -0.012}
+        length: 12.0
+        gdt:
+          position: 0.08
+          perpendicularity: 0.04
+          modifier: "MMC"
+          datum_refs: ["datum_A", "pin_1"]
+        cost_model: {base_a: 1.5, scale_b: 0.08, exponent: 2.0, bounds: [0.02, 0.30]}
+
+  - id: "carrier"
+    fixed: false
+    nominal_pose:
+      pos: [0.0, 0.0, 10.0]
+      rpy_deg: [0.0, 0.0, 0.0]
+    features:
+      - id: "bottom_pad"
+        type: "planar"
+        nominal_frame: {pos: [0.0, 0.0, 0.0], rpy_deg: [0.0, 0.0, 0.0]}
+        bounds: {lx: 120.0, ly: 80.0}
+        gdt: {profile: 0.10, flatness: 0.04}
+        cost_model: {base_a: 1.0, scale_b: 0.10, exponent: 2.0, bounds: [0.02, 0.40]}
+
+      - id: "hole_1"
+        type: "cylinder_hole"
+        nominal_frame: {pos: [20.0, 20.0, 4.0], rpy_deg: [0.0, 0.0, 0.0]}
+        size: {nom: 6.050, upper_dev: 0.025, lower_dev: 0.000}
+        length: 8.0
+        gdt:
+          position: 0.10
+          perpendicularity: 0.05
+          modifier: "MMC"
+          datum_refs: ["bottom_pad"]
+        cost_model: {base_a: 1.0, scale_b: 0.12, exponent: 2.0, bounds: [0.02, 0.40]}
+
+      - id: "slot_2"
+        type: "slot_width"
+        nominal_frame: {pos: [100.0, 20.0, 4.0], rpy_deg: [0.0, 0.0, 0.0]}
+        size: {nom: 6.050, upper_dev: 0.025, lower_dev: 0.000}
+        bounds: {lx: 10.0, lz: 8.0}
+        gdt:
+          position: 0.10
+          modifier: "MMC"
+          datum_refs: ["bottom_pad", "hole_1"]
+        cost_model: {base_a: 1.0, scale_b: 0.10, exponent: 2.0, bounds: [0.02, 0.40]}
+
+      - id: "weld_pad"
+        type: "point"
+        nominal_frame: {pos: [95.0, 45.0, 25.0], rpy_deg: [0.0, 0.0, 0.0]}
+        gdt: {profile: 0.06}
+        cost_model: {base_a: 0.8, scale_b: 0.06, exponent: 2.0, bounds: [0.02, 0.25]}
+
+mates:
+  - id: "primary_seat"
+    type: "planar_coincident"
+    source: "housing.datum_A"
+    target: "carrier.bottom_pad"
+
+  - id: "primary_pin"
+    type: "parallel_pin_hole"
+    source: "housing.pin_1"
+    target: "carrier.hole_1"
+    contact_offset_z: {source: -2.0, target: 0.0}
+    kinematic_mode: "float_random"
+
+  - id: "clocking_slot"
+    type: "clocking_pin_slot"
+    source: "housing.pin_2"
+    target: "carrier.slot_2"
+    contact_offset_z: {source: -2.0, target: 0.0}
+    kinematic_mode: "float_random"
+
+jam_checks:
+  - id: "pin_2_slot_clearance_fit"
+    source: "housing.pin_2"
+    target: "carrier.slot_2"
+    axis: "y"
+
+measurements:
+  - id: "laser_focal_z"
+    description: "Vertical Z distance from housing datum A plane to carrier weld target"
+    type: "point_to_plane_distance"
+    axis: [0.0, 0.0, 1.0]
+    source: "housing.datum_A"
+    target: "carrier.weld_pad"
+    limits: {lsl: 24.850, usl: 25.150}
