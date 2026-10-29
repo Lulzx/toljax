@@ -56,15 +56,16 @@ Engineers use expensive desktop programs (Siemens 3DCS, CETOL) to answer one que
 You describe parts, tolerances and how they fit together in a YAML file, and the tool runs from the command line:
 
 ```text
-   assembly.yaml ──► $ toljax run ──► report.html
-        │                               "WC:  ±0.41mm"
-        │                               "RSS: ±0.18mm"
-     git diff,                          "MC:  0.02% fail"
-     code review,
-     CI pipeline
+   assembly.yaml ──► $ toljax run ──► results.json / report.html
+        │
+        │            laser_focal_z  (spec 25.00 ± 0.15 mm)
+     git diff,         worst case      ±0.127 mm   PASS
+     code review,      linear RSS      Cpk 1.48
+     CI pipeline       Monte Carlo     68.4% of builds assemble
+                                       (31.6% jam on the pins)
 ```
 
-This puts mechanical tolerance analysis into the same git and CI workflow software teams use.
+These are the real numbers for `examples/ev_busbar.yaml` with `--mc-samples 100000`. This puts mechanical tolerance analysis into the same git and CI workflow software teams use.
 
 ### 5. Second trick: work backwards
 
@@ -94,16 +95,23 @@ This matters because tight tolerances cost money:
       lots of rejects)
 ```
 
-The optimizer loosens the features that barely affect the result, which saves money, and tightens only the ones that matter:
+The optimizer loosens the features that barely affect the result, which saves money, and holds the ones that matter. Real output of `toljax optimize examples/ev_busbar.yaml --target-cpk 1.33`:
 
 ```text
-   BEFORE                        AFTER optimize
-   pin_1    ±0.08  ███           pin_1    ±0.05  ████     ← matters, tighten
-   datum_A  ±0.05  ████          datum_A  ±0.20  █        ← doesn't, loosen
-   carrier  ±0.10  ██            carrier  ±0.15  █
-   ─────────────────             ─────────────────
-   cost: $$$$                    cost: $$     (same quality)
+   feature              BEFORE     AFTER
+   housing.datum_A      0.050  →   0.250    loosened (hit upper bound)
+   housing.pin_1        0.080  →   0.300    loosened (hit upper bound)
+   housing.pin_2        0.080  →   0.300    loosened (hit upper bound)
+   carrier.hole_1       0.100  →   0.400    loosened (hit upper bound)
+   carrier.slot_2       0.100  →   0.400    loosened (hit upper bound)
+   carrier.weld_pad     0.060  →   0.120    loosened
+   carrier.bottom_pad   0.100  →   0.098    held ← drives 91% of the variance
+   ──────────────────────────────────────
+   cost                 142.5  →    28.9    (−79.7%, solved in ~4 ms)
+   Cpk                   1.48  →    1.33    (meets the target exactly)
 ```
+
+> **Caveat:** the optimizer currently constrains only the measurement's $C_{pk}$, not whether the parts physically fit. Re-running `toljax run` on the optimized YAML shows the worst-case band growing to ±0.156 mm (past the ±0.15 spec) and the fraction of Monte Carlo builds that assemble falling from 68.4% to 17.3%, because the loosened pins and holes jam. Check `jam_dpmo` on the result before using an optimized allocation.
 
 ### 6. How it finds the answer quickly
 
@@ -131,7 +139,7 @@ It's built on **JAX**, a library that can compute derivatives automatically: how
    ┌─────────────────────────────────────────────────────────────┐
    │  It does the job of expensive desktop GD&T tools as code,   │
    │  and also tells you the cheapest tolerances that will still │
-   │  give a working product.                                    │
+   │  hit your target Cpk.                                       │
    └─────────────────────────────────────────────────────────────┘
 ```
 
