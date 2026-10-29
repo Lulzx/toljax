@@ -87,7 +87,7 @@ def generate_html_report(results: dict[str, Any], out_path: str | Path) -> Path:
   <h1><code>toljax</code> Variation Analysis — {asm_name}</h1>
   <p>Determinate: <b>{kin.get('determinate')}</b> | Rank: <b>{kin.get('jacobian_rank')}/{kin.get('active_dofs')}</b> |
      Jam DPMO: <b>{kin.get('jam_dpmo')}</b> | S+H Time: <b>{timing.get('jacobian_hessian_fp64_ms')} ms</b> |
-     MC Time: <b>{timing.get('monte_carlo_1m_fp32_ms')} ms</b></p>
+     MC Time: <b>{timing.get('monte_carlo_fp32_ms')} ms</b></p>
   {''.join(rows_html)}
   <script id="toljax-json" type="application/json">{json.dumps(results)}</script>
 </body>

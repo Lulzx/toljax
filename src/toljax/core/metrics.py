@@ -373,7 +373,7 @@ def run_variation_analysis(
         "execution_time_ms": {
             "jit_compile_ms": round(jit_compile_ms, 2),
             "jacobian_hessian_fp64_ms": round(jac_hess_ms, 2),
-            "monte_carlo_1m_fp32_ms": round(mc_ms, 2),
+            "monte_carlo_fp32_ms": round(mc_ms, 2),
         },
         "measurements": meas_results,
     }

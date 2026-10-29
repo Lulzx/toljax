@@ -12,17 +12,34 @@ import numpy as np
 from scipy.optimize import minimize
 
 from toljax.core.graph import CompiledAssembly
+from toljax.core.metrics import _sample_latent_batch
 from toljax.schema.assembly_spec import AssemblySpec, UNIT_TO_MM
+
+
+def _has_fit_checks(compiled: CompiledAssembly) -> bool:
+    spec = compiled.spec
+    return bool(spec.jam_checks) or any(
+        m.type in ("parallel_pin_hole", "cylindrical_clearance") for m in spec.mates
+    )
 
 
 def optimize_tolerances(
     compiled: CompiledAssembly,
     target_cpk: float = 1.33,
+    max_jam_dpmo: float | None = 1350.0,
+    fit_samples: int = 4096,
+    verify_samples: int = 100_000,
+    seed: int = 0,
 ) -> tuple[AssemblySpec, dict[str, Any]]:
     """Minimize total manufacturing cost C(t) = sum_j (a_j + b_j / t_j^alpha_j)
     subject to smooth second-order capability constraints:
       g_upper,k(t) = USL_k - mu_k(t) - 3 * target_cpk * sigma_k(t) >= 0
       g_lower,k(t) = mu_k(t) - LSL_k - 3 * target_cpk * sigma_k(t) >= 0
+    and, when the assembly has clearance fits and `max_jam_dpmo` is not None, a fit constraint:
+      g_fit(t) = mean of the n_tail smallest M_fit(z_i; t) over fixed samples z_i >= 0
+    with n_tail = floor(max_jam_dpmo * 1e-6 * fit_samples). This CVaR bound implies at most
+    n_tail - 1 sampled builds jam, so the empirical jam rate stays below `max_jam_dpmo`. The
+    result is re-checked on `verify_samples` fresh builds and reported as `fit.jam_dpmo_after`.
     """
     n_opt = len(compiled.opt_feature_keys)
     if n_opt == 0:
@@ -91,10 +108,37 @@ def optimize_tolerances(
 
     constraints_jac_fn = jax.jit(jax.jacrev(constraints_fn))
 
+    use_fit = max_jam_dpmo is not None and _has_fit_checks(compiled)
+
+    def _jam_margins_of_t(t_vec: jax.Array, z_batch: jax.Array) -> jax.Array:
+        scale = t_vec / t_nom
+        return jax.vmap(
+            lambda z: jnp.min(compiled.eval_jam_margin_vector_scaled(z, scale))
+        )(z_batch)
+
+    jam_margins_jit = jax.jit(_jam_margins_of_t)
+
+    if use_fit:
+        n_tail = max(1, int(np.floor(max_jam_dpmo * 1e-6 * fit_samples)))
+        z_fit = jnp.asarray(
+            _sample_latent_batch(np.random.default_rng(seed), fit_samples, compiled),
+            dtype=jnp.float64,
+        )
+
+        @jax.jit
+        def fit_constraint_fn(t_vec: jax.Array) -> jax.Array:
+            margins = _jam_margins_of_t(t_vec, z_fit)
+            worst = -jax.lax.top_k(-margins, n_tail)[0]
+            return jnp.mean(worst)[None]
+
+        fit_constraint_jac_fn = jax.jit(jax.jacrev(fit_constraint_fn))
+
     # Warm-up JIT compilation
     _ = cost_and_grad(t_nom)
     _ = constraints_fn(t_nom)
     _ = constraints_jac_fn(t_nom)
+    if use_fit:
+        _ = fit_constraint_jac_fn(t_nom)
 
     t_opt_start = time.perf_counter()
     init_cost = float(cost_and_grad(t_nom)[0])
@@ -113,13 +157,28 @@ def optimize_tolerances(
             constraints_jac_fn(jnp.asarray(t_np, dtype=jnp.float64)), dtype=np.float64
         )
 
+    scipy_constraints = [{"type": "ineq", "fun": _scipy_con, "jac": _scipy_con_jac}]
+    if use_fit:
+        scipy_constraints.append(
+            {
+                "type": "ineq",
+                "fun": lambda t_np: np.asarray(
+                    fit_constraint_fn(jnp.asarray(t_np, dtype=jnp.float64)), dtype=np.float64
+                ),
+                "jac": lambda t_np: np.asarray(
+                    fit_constraint_jac_fn(jnp.asarray(t_np, dtype=jnp.float64)),
+                    dtype=np.float64,
+                ),
+            }
+        )
+
     res = minimize(
         _scipy_obj,
         x0=np.asarray(t_nom, dtype=np.float64),
         method="SLSQP",
         jac=True,
         bounds=compiled.opt_bounds,
-        constraints={"type": "ineq", "fun": _scipy_con, "jac": _scipy_con_jac},
+        constraints=scipy_constraints,
         options={"ftol": 1e-10, "maxiter": 200},
     )
     opt_solve_ms = (time.perf_counter() - t_opt_start) * 1000.0
@@ -199,6 +258,28 @@ def optimize_tolerances(
             }
         )
 
+    fit_report: dict[str, Any] | None = None
+    if use_fit:
+        # Re-check jam rate on fresh builds the optimizer never saw
+        rng_v = np.random.default_rng(seed + 1)
+        jams_before = 0
+        jams_after = 0
+        t_star_j = jnp.asarray(t_star, dtype=jnp.float64)
+        rem = verify_samples
+        while rem > 0:
+            cur = min(20_000, rem)
+            z_v = jnp.asarray(_sample_latent_batch(rng_v, cur, compiled), dtype=jnp.float64)
+            jams_before += int(jnp.sum(jam_margins_jit(t_nom, z_v) < 0.0))
+            jams_after += int(jnp.sum(jam_margins_jit(t_star_j, z_v) < 0.0))
+            rem -= cur
+        fit_report = {
+            "max_jam_dpmo": max_jam_dpmo,
+            "fit_samples": fit_samples,
+            "verify_samples": verify_samples,
+            "jam_dpmo_before": round(jams_before / verify_samples * 1_000_000.0, 2),
+            "jam_dpmo_after": round(jams_after / verify_samples * 1_000_000.0, 2),
+        }
+
     report = {
         "assembly_name": compiled.spec.assembly.name,
         "converged": bool(res.success),
@@ -211,5 +292,6 @@ def optimize_tolerances(
         "cost_reduction_pct": round((1.0 - final_cost / max(init_cost, 1e-12)) * 100.0, 2),
         "features": feature_summary,
         "measurements": meas_cpk_after,
+        "fit": fit_report,
     }
     return new_spec, report

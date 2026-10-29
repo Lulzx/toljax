@@ -61,8 +61,8 @@ You describe parts, tolerances and how they fit together in a YAML file, and the
         │            laser_focal_z  (spec 25.00 ± 0.15 mm)
      git diff,         worst case      ±0.127 mm   PASS
      code review,      linear RSS      Cpk 1.48
-     CI pipeline       Monte Carlo     68.4% of builds assemble
-                                       (31.6% jam on the pins)
+     CI pipeline       Monte Carlo     99.999% of builds pass
+                                       (0 jams in 100,000 builds)
 ```
 
 These are the real numbers for `examples/ev_busbar.yaml` with `--mc-samples 100000`. This puts mechanical tolerance analysis into the same git and CI workflow software teams use.
@@ -95,23 +95,24 @@ This matters because tight tolerances cost money:
       lots of rejects)
 ```
 
-The optimizer loosens the features that barely affect the result, which saves money, and holds the ones that matter. Real output of `toljax optimize examples/ev_busbar.yaml --target-cpk 1.33`:
+The optimizer loosens the features that barely affect the result, which saves money, and holds the ones that matter. It has two constraints: the measurement must hit the target $C_{pk}$, and the parts must still fit together (jam rate under `--max-jam-dpmo`, default 1,350 per million). Real output of `toljax optimize examples/ev_busbar.yaml --target-cpk 1.33`:
 
 ```text
    feature              BEFORE     AFTER
-   housing.datum_A      0.050  →   0.250    loosened (hit upper bound)
-   housing.pin_1        0.080  →   0.300    loosened (hit upper bound)
    housing.pin_2        0.080  →   0.300    loosened (hit upper bound)
-   carrier.hole_1       0.100  →   0.400    loosened (hit upper bound)
    carrier.slot_2       0.100  →   0.400    loosened (hit upper bound)
-   carrier.weld_pad     0.060  →   0.120    loosened
-   carrier.bottom_pad   0.100  →   0.098    held ← drives 91% of the variance
+   housing.datum_A      0.050  →   0.218    loosened
+   carrier.weld_pad     0.060  →   0.122    loosened
+   housing.pin_1        0.080  →   0.129    loosened a little ← held back so
+   carrier.hole_1       0.100  →   0.106    loosened a little ←   the pin fits
+   carrier.bottom_pad   0.100  →   0.098    held ← drives most of the variance
    ──────────────────────────────────────
-   cost                 142.5  →    28.9    (−79.7%, solved in ~4 ms)
+   cost                 142.5  →    43.5    (−69.5%)
    Cpk                   1.48  →    1.33    (meets the target exactly)
+   jam rate                 10 →     730    per million (limit 1,350)
 ```
 
-> **Caveat:** the optimizer currently constrains only the measurement's $C_{pk}$, not whether the parts physically fit. Re-running `toljax run` on the optimized YAML shows the worst-case band growing to ±0.156 mm (past the ±0.15 spec) and the fraction of Monte Carlo builds that assemble falling from 68.4% to 17.3%, because the loosened pins and holes jam. Check `jam_dpmo` on the result before using an optimized allocation.
+The jam rate is re-checked on 100,000 fresh simulated builds the optimizer never saw. Without the fit constraint (`--no-fit-check`) the optimizer cuts cost by 79.7%, but it does so by loosening the locating pin and hole until 44% of builds jam. The worst-case band of the optimized design is ±0.156 mm, just past the ±0.15 spec. That's expected when you design to a statistical $C_{pk}$ instead of worst case.
 
 ### 6. How it finds the answer quickly
 
@@ -124,6 +125,18 @@ It's built on **JAX**, a library that can compute derivatives automatically: how
      ● ● ● ★ ● ● ●                  straight to the answer)
      thousands of runs             a few steps, milliseconds
 ```
+
+How much faster, measured with [`benchmarks/numpy_baseline.py`](benchmarks/numpy_baseline.py) on the busbar example (37 inputs, Apple Silicon CPU). The baseline is the conventional method: SciPy solves each simulated build one at a time, and sensitivities come from nudging each input (finite differences). Both sides use the same model, so the results agree to within rounding.
+
+```text
+                                   conventional        toljax
+   sensitivities (S + H)           1,508 ms            0.8 ms
+                                   (2,813 solves)      (+4.2 s one-time compile)
+   Monte Carlo, 100,000 builds     ~50 s (projected    1.1 s
+                                   from 2,000)
+```
+
+The catch is the one-time compile. A single CLI call still takes several seconds, because JAX has to trace and compile the model first. Compiled programs are cached on disk (`~/.cache/toljax/jax`), which roughly halves repeat runs: `toljax run` drops from ~10 s to ~5 s. The speed pays off when the model stays loaded, such as in the Python API, a sweep, or the optimizer loop.
 
 ### 7. Why it's hard to build
 
@@ -219,9 +232,11 @@ uv run toljax run examples/ev_busbar.yaml \
   --json-out results.json \
   --html-out report.html
 
-# 2. Run inverse cost-tolerance optimization for target Cpk >= 1.33
+# 2. Run inverse cost-tolerance optimization for target Cpk >= 1.33,
+#    keeping the jam rate under 1,350 per million builds
 uv run toljax optimize examples/ev_busbar.yaml \
   --target-cpk 1.33 \
+  --max-jam-dpmo 1350 \
   --out-yaml optimized_assembly.yaml
 
 # 3. Extract nominal feature frames from a STEP file into YAML boilerplate

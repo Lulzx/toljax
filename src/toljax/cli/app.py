@@ -52,6 +52,12 @@ def cli_run(
 def cli_optimize(
     assembly_yaml: Path = typer.Argument(..., help="Path to assembly.yaml"),
     target_cpk: float = typer.Option(1.33, "--target-cpk", help="Target minimum Cpk"),
+    max_jam_dpmo: float = typer.Option(
+        1350.0, "--max-jam-dpmo", help="Maximum allowed jam rate (defects per million builds)"
+    ),
+    no_fit_check: bool = typer.Option(
+        False, "--no-fit-check", help="Optimize Cpk only, without the jam-rate constraint"
+    ),
     out_yaml: Optional[Path] = typer.Option(
         None, "--out-yaml", help="Output path for optimized assembly YAML"
     ),
@@ -62,7 +68,11 @@ def cli_optimize(
     """Run inverse cost-tolerance optimization."""
     spec = load_assembly_spec(assembly_yaml)
     compiled = compile_assembly(spec)
-    new_spec, report = optimize_tolerances(compiled, target_cpk=target_cpk)
+    new_spec, report = optimize_tolerances(
+        compiled,
+        target_cpk=target_cpk,
+        max_jam_dpmo=None if no_fit_check else max_jam_dpmo,
+    )
     if out_yaml is not None:
         save_assembly_spec(new_spec, out_yaml)
     formatted = json.dumps(report, indent=2)

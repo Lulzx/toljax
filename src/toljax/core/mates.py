@@ -133,24 +133,22 @@ def pin_hole_tilt_jam_margin(
     r_hole: Array,
     r_pin: Array,
     dR_rel: Array,
-    p_rel: Array,
     engagement_length: Array,
 ) -> Array:
-    """Compute exact radial clearance margin M_fit across the top and bottom of engagement depth L_e.
+    """Compute the engagement-depth tilt binding margin M_fit = C_r,eff.
 
-    At the top (+L_e/2) and bottom (-L_e/2) of the engagement cylinder, the lateral axis
-    offset is p_xy +/- (L_e / 2) * [dR_13, -dR_23]^T. The pin binds/jams if either endpoint
-    exceeds the radial clearance C_r = r_hole - r_pin:
-      M_fit = C_r - max(||p_top||_2, ||p_bot||_2)
+    A pin tilted by dtheta_perp = [dR_13, -dR_23]^T relative to its hole sweeps a lateral
+    span of (L_e / 2) * ||dtheta_perp||_2 about the engagement midpoint. Some float position
+    p_xy,mid fits at both ends (+/- L_e/2) if and only if that span is within the radial
+    clearance C_r = r_hole - r_pin:
+      M_fit = C_r - (L_e / 2) * ||dtheta_perp||_2
+
+    The sampled float eta_xy is deliberately excluded: it is drawn over the full clearance
+    disk independently of tilt, so including it would flag assembleable builds as jammed.
     """
     c_r = r_hole - r_pin
     tilt_vec = jnp.stack([dR_rel[..., 0, 2], -dR_rel[..., 1, 2]], axis=-1)
-    half_span = 0.5 * engagement_length[..., None] * tilt_vec
-    p_top = p_rel[..., :2] + half_span
-    p_bot = p_rel[..., :2] - half_span
-    r_top = jnp.linalg.norm(p_top, axis=-1)
-    r_bot = jnp.linalg.norm(p_bot, axis=-1)
-    return c_r - jnp.maximum(r_top, r_bot)
+    return c_r - 0.5 * engagement_length * jnp.linalg.norm(tilt_vec, axis=-1)
 
 
 def residual_planar_coincident(dR_rel: Array, p_rel: Array) -> Array:

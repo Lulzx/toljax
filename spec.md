@@ -175,9 +175,9 @@ When a pin mates inside a hole of engagement depth $L_e$ while their axes have a
 
 > **Keeping Equality Residuals $C^\infty$ at Nominal:** Subtracting a regularized cone norm $\frac{L_e}{2}\sqrt{\Delta R_{13}^2 + \Delta R_{23}^2 + \epsilon_{\text{reg}}^2}$ directly inside the equality residual $\mathbf{F}(\mathbf{q}, \mathbf{z}) = \mathbf{0}$ would place a cone apex at $\Delta R = 0$, shifting the analytical Jacobian by $\frac{L_e}{2}\epsilon_{\text{reg}}$ and injecting a $1/\epsilon_{\text{reg}}$ curvature spike into the Hessian at nominal. Instead, the equality residual uses the smooth bilinear product $C_r(\mathbf{z})\boldsymbol{\eta}_{xy}$, while engagement-depth tilt binding at $z = \pm L_e/2$ is evaluated as an inequality fit margin:
 
-$$M_{\text{fit},m}^{\text{tilt}}(\mathbf{z}) = C_r(\mathbf{z}) - \max\!\left(\left\lVert \mathbf{p}_{xy,\text{mid}} + \frac{L_e}{2}\begin{bmatrix} \Delta R_{13} \\ -\Delta R_{23} \end{bmatrix} \right\rVert_2, \; \left\lVert \mathbf{p}_{xy,\text{mid}} - \frac{L_e}{2}\begin{bmatrix} \Delta R_{13} \\ -\Delta R_{23} \end{bmatrix} \right\rVert_2\right)$$
+$$M_{\text{fit},m}^{\text{tilt}}(\mathbf{z}) = C_{r,\text{eff}}(\mathbf{z}) = C_r(\mathbf{z}) - \frac{L_e}{2}\left\lVert \begin{bmatrix} \Delta R_{13} \\ -\Delta R_{23} \end{bmatrix} \right\rVert_2$$
 
-Whenever $\frac{L_e}{2}\lVert\Delta\boldsymbol{\theta}_\perp\rVert_2 > C_r(\mathbf{z})$ (or the combined float + tilt exceeds $C_r(\mathbf{z})$ at either end of the hole), $M_{\text{fit},m}^{\text{tilt}}(\mathbf{z}) < 0$ and **the primary pin itself binds/jams in the hole due to angular cocking**, even without a second pin!
+This is a feasibility test: a float position $\mathbf{p}_{xy,\text{mid}}$ with $\lVert \mathbf{p}_{xy,\text{mid}} \pm \frac{L_e}{2}\Delta \boldsymbol{\theta}_\perp \rVert_2 \le C_r$ exists if and only if $M_{\text{fit},m}^{\text{tilt}} \ge 0$. The sampled float $\boldsymbol{\eta}_{xy}$ is deliberately excluded: it is drawn over the full clearance disk independently of tilt, so testing the sampled position would flag assembleable builds as jammed. Whenever $\frac{L_e}{2}\lVert\Delta\boldsymbol{\theta}_\perp\rVert_2 > C_r(\mathbf{z})$, $M_{\text{fit},m}^{\text{tilt}}(\mathbf{z}) < 0$ and **the primary pin itself binds/jams in the hole due to angular cocking**, even without a second pin!
 
 #### Dimensionless Two-Sided SVD Rank Check & Conditional Jam Analysis
 Because the columns of $\mathbf{J}_{\mathbf{q}}(\mathbf{0}, \mathbf{0}) \in \mathbb{R}^{C \times 6 N_{\text{movable}}}$ mix dimensionless angular derivatives (scaled by lever arms $\sim L_{\text{char}}$ in translational rows) and translational derivatives ($\sim 1$), `graph.py` first computes the assembly's characteristic length $L_{\text{char}} = \max_{i,j} \lVert \mathbf{p}_{i}^{\text{nom}} - \mathbf{p}_{j}^{\text{nom}} \rVert_2$ (or $100.0\text{ mm}$ minimum), right-multiplies $\mathbf{J}_{\mathbf{q}}$ by the column-scaling matrix $\mathbf{D}_{\text{scale}} = \text{diag}(L_{\text{char}}^{-1} I_3, I_3)$ and left-multiplies translational rows by $L_{\text{char}}^{-1}$ to form the **dimensionless Jacobian** $\tilde{\mathbf{J}}_{\mathbf{q}}$, and computes its SVD with threshold $\epsilon_{\text{svd}} = 10^{-8} \sigma_{\max}(\tilde{\mathbf{J}}_{\mathbf{q}})$:
@@ -480,7 +480,7 @@ toljax inspect <part.step> [--out-yaml part_features.yaml]
   "execution_time_ms": {
     "jit_compile_ms": 185.0,
     "jacobian_hessian_fp64_ms": 2.4,
-    "monte_carlo_1m_fp32_ms": 148.2
+    "monte_carlo_fp32_ms": 148.2
   },
   "measurements": [
     {

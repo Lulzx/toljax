@@ -102,8 +102,11 @@ class CompiledAssembly:
     residual_fn: Callable[[Array, Array], Array]
     solve_equilibrium: Callable[[Array], Array]
     eval_measurements_dy: Callable[[Array], Array]
+    eval_measurements_dy_at: Callable[..., Array]
     eval_measurements_dy_scaled: Callable[[Array, Array], Array]
     eval_jam_margins: Callable[[Array], Array]
+    eval_jam_margin_vector: Callable[[Array], Array]
+    eval_jam_margin_vector_scaled: Callable[[Array, Array | None], Array]
 
 
 def compile_assembly(spec: AssemblySpec) -> CompiledAssembly:
@@ -554,14 +557,9 @@ def compile_assembly(spec: AssemblySpec) -> CompiledAssembly:
         )
         meas_nominals_list.append(float(y_n))
 
-    def eval_measurements_dy_scaled(z: Array, tol_scale: Array) -> Array:
+    def eval_measurements_dy_at(q_star: Array, z: Array, tol_scale: Array | None = None) -> Array:
+        """Evaluate measurement deviations dy at a given equilibrium pose q_star."""
         dtype = z.dtype
-
-        def res_scaled(q_v: Array, z_v: Array) -> Array:
-            return residual_fn_scaled(q_v, z_v, tol_scale=tol_scale)
-
-        solver_scaled = make_equilibrium_solver(res_scaled, n_dofs=n_dofs, num_iters=5)
-        q_star = solver_scaled(z)
         xi_map, _ = _eval_all_features(z, tol_scale=tol_scale)
         dys: list[Array] = []
         for idx_m, meas in enumerate(spec.measurements):
@@ -583,35 +581,33 @@ def compile_assembly(spec: AssemblySpec) -> CompiledAssembly:
             dys.append(dy)
         return jnp.stack(dys, axis=-1)
 
-    def eval_measurements_dy(z: Array) -> Array:
-        dtype = z.dtype
-        q_star = solve_equilibrium(z)
-        xi_map, _ = _eval_all_features(z, tol_scale=None)
-        dys: list[Array] = []
-        for idx_m, meas in enumerate(spec.measurements):
-            q_src = _get_part_q(q_star, feat_part[meas.source])
-            q_tgt = _get_part_q(q_star, feat_part[meas.target])
-            f_src = _make_feature_frame(meas.source, 0.0, dtype)
-            f_tgt = _make_feature_frame(meas.target, 0.0, dtype)
-            _, dy = eval_measurement_deviation(
-                meas.type,
-                jnp.asarray(meas.axis, dtype=dtype),
-                f_src,
-                q_src,
-                xi_map[meas.source],
-                f_tgt,
-                q_tgt,
-                xi_map[meas.target],
-                jnp.asarray(meas_d_nom[idx_m], dtype=dtype),
-            )
-            dys.append(dy)
-        return jnp.stack(dys, axis=-1)
+    def _res_augmented(q_v: Array, z_aug: Array) -> Array:
+        return residual_fn_scaled(q_v, z_aug[:n_vars], tol_scale=z_aug[n_vars:])
 
-    def eval_jam_margins(z: Array) -> Array:
-        """Evaluate scalar fit margin M_fit(z) across primary pin tilt-binding and jam_checks."""
+    # tol_scale rides along in the solver input so the implicit JVP rule differentiates it
+    # (custom_jvp cannot differentiate values captured by closure).
+    solve_equilibrium_augmented = make_equilibrium_solver(
+        _res_augmented, n_dofs=n_dofs, num_iters=5
+    )
+
+    def _solve_scaled(z: Array, tol_scale: Array | None) -> Array:
+        if tol_scale is None:
+            return solve_equilibrium(z)
+        return solve_equilibrium_augmented(
+            jnp.concatenate([z, jnp.asarray(tol_scale, dtype=z.dtype)])
+        )
+
+    def eval_measurements_dy_scaled(z: Array, tol_scale: Array) -> Array:
+        return eval_measurements_dy_at(_solve_scaled(z, tol_scale), z, tol_scale)
+
+    def eval_measurements_dy(z: Array) -> Array:
+        return eval_measurements_dy_at(solve_equilibrium(z), z)
+
+    def eval_jam_margin_vector_scaled(z: Array, tol_scale: Array | None) -> Array:
+        """Evaluate per-check fit margins [M_fit,1(z), ...] (one per pin mate and jam_check)."""
         dtype = z.dtype
-        q_star = solve_equilibrium(z)
-        xi_map, r_map = _eval_all_features(z, tol_scale=None)
+        q_star = _solve_scaled(z, tol_scale)
+        xi_map, r_map = _eval_all_features(z, tol_scale=tol_scale)
         margins: list[Array] = []
 
         for m in spec.mates:
@@ -638,7 +634,7 @@ def compile_assembly(spec: AssemblySpec) -> CompiledAssembly:
                     dtype=dtype,
                 )
                 margins.append(
-                    pin_hole_tilt_jam_margin(r_hole, r_pin, dR_rel, p_rel, l_e)
+                    pin_hole_tilt_jam_margin(r_hole, r_pin, dR_rel, l_e)
                 )
 
         for jc in spec.jam_checks:
@@ -666,8 +662,15 @@ def compile_assembly(spec: AssemblySpec) -> CompiledAssembly:
             margins.append(c_avail - misalign)
 
         if not margins:
-            return jnp.ones((), dtype=dtype)
-        return jnp.min(jnp.stack(margins, axis=-1))
+            return jnp.ones((1,), dtype=dtype)
+        return jnp.stack(margins, axis=-1)
+
+    def eval_jam_margin_vector(z: Array) -> Array:
+        return eval_jam_margin_vector_scaled(z, tol_scale=None)
+
+    def eval_jam_margins(z: Array) -> Array:
+        """Evaluate scalar fit margin M_fit(z) across primary pin tilt-binding and jam_checks."""
+        return jnp.min(eval_jam_margin_vector(z))
 
     return CompiledAssembly(
         spec=spec,
@@ -696,6 +699,9 @@ def compile_assembly(spec: AssemblySpec) -> CompiledAssembly:
         residual_fn=residual_fn,
         solve_equilibrium=solve_equilibrium,
         eval_measurements_dy=eval_measurements_dy,
+        eval_measurements_dy_at=eval_measurements_dy_at,
         eval_measurements_dy_scaled=eval_measurements_dy_scaled,
         eval_jam_margins=eval_jam_margins,
+        eval_jam_margin_vector=eval_jam_margin_vector,
+        eval_jam_margin_vector_scaled=eval_jam_margin_vector_scaled,
     )

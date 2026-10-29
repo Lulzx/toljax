@@ -321,17 +321,22 @@ def test_primary_pin_engagement_depth_tilt_jam_margin():
     c_r = float(r_hole - r_pin)  # 0.03425 mm radial clearance
     L_e = jnp.array(8.0, dtype=jnp.float64)
 
-    # Zero tilt, centered -> margin equals full radial clearance C_r
+    # Zero tilt -> margin equals full radial clearance C_r
     dR_zero = jnp.zeros((3, 3), dtype=jnp.float64)
-    p_zero = jnp.zeros(3, dtype=jnp.float64)
-    m0 = float(pin_hole_tilt_jam_margin(r_hole, r_pin, dR_zero, p_zero, L_e))
+    m0 = float(pin_hole_tilt_jam_margin(r_hole, r_pin, dR_zero, L_e))
     np.testing.assert_allclose(m0, c_r, rtol=1e-14)
 
     # Tilt exceeding 2 * C_r / L_e = 2 * 0.03425 / 8.0 = 0.0085625 rad -> jam (M_fit < 0)
     dR_jam = jnp.zeros((3, 3), dtype=jnp.float64).at[0, 2].set(0.010)
-    m_jam = float(pin_hole_tilt_jam_margin(r_hole, r_pin, dR_jam, p_zero, L_e))
+    m_jam = float(pin_hole_tilt_jam_margin(r_hole, r_pin, dR_jam, L_e))
     assert m_jam < 0.0
     np.testing.assert_allclose(m_jam, c_r - 0.5 * 8.0 * 0.010, rtol=1e-14)
+
+    # Tilt below the binding limit always leaves a feasible float position -> no jam
+    dR_ok = jnp.zeros((3, 3), dtype=jnp.float64).at[0, 2].set(0.005).at[1, 2].set(-0.004)
+    m_ok = float(pin_hole_tilt_jam_margin(r_hole, r_pin, dR_ok, L_e))
+    np.testing.assert_allclose(m_ok, c_r - 0.5 * 8.0 * np.hypot(0.005, 0.004), rtol=1e-14)
+    assert m_ok > 0.0
 
 
 def test_svd_rank_detects_under_and_over_constrained_mates():
