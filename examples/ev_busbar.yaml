@@ -128,3 +128,11 @@ measurements:
     source: "housing.datum_A"
     target: "carrier.weld_pad"
     limits: {lsl: 24.850, usl: 25.150}
+
+  - id: "weld_y_alignment"
+    description: "In-plane Y offset of the carrier weld target from housing locating pin 1"
+    type: "distance_xyz"
+    axis: [0.0, 1.0, 0.0]
+    source: "housing.pin_1"
+    target: "carrier.weld_pad"
+    limits: {lsl: 24.800, usl: 25.200}

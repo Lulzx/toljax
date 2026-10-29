@@ -63,9 +63,14 @@ You describe parts, tolerances and how they fit together in a YAML file, and the
      code review,      linear RSS      Cpk 1.48
      CI pipeline       Monte Carlo     99.999% of builds pass
                                        (0 jams in 100,000 builds)
+
+                     weld_y_alignment  (spec 25.00 ± 0.20 mm)
+                       worst case      ±0.217 mm   FAIL
+                       linear RSS      Cpk 2.25
+                       Monte Carlo     0 out-of-spec in 100,000
 ```
 
-These are the real numbers for `examples/ev_busbar.yaml` with `--mc-samples 100000`. This puts mechanical tolerance analysis into the same git and CI workflow software teams use.
+These are the real numbers for `examples/ev_busbar.yaml` with `--mc-samples 100000`. The second measurement shows why statistics matter: the worst case, where every part is at its limit in the worst direction at once, falls outside the spec, yet no simulated build does. This puts mechanical tolerance analysis into the same git and CI workflow software teams use.
 
 ### 5. Second trick: work backwards
 
@@ -95,24 +100,25 @@ This matters because tight tolerances cost money:
       lots of rejects)
 ```
 
-The optimizer loosens the features that barely affect the result, which saves money, and holds the ones that matter. It has two constraints: the measurement must hit the target $C_{pk}$, and the parts must still fit together (jam rate under `--max-jam-dpmo`, default 1,350 per million). Real output of `toljax optimize examples/ev_busbar.yaml --target-cpk 1.33`:
+The optimizer loosens the features that barely affect the result, which saves money, and holds the ones that matter. It has two constraints: every measurement must hit the target $C_{pk}$, and the parts must still fit together (jam rate under `--max-jam-dpmo`, default 1,350 per million). Real output of `toljax optimize examples/ev_busbar.yaml --target-cpk 1.33`:
 
 ```text
    feature              BEFORE     AFTER
-   housing.pin_2        0.080  →   0.300    loosened (hit upper bound)
-   carrier.slot_2       0.100  →   0.400    loosened (hit upper bound)
-   housing.datum_A      0.050  →   0.218    loosened
-   carrier.weld_pad     0.060  →   0.122    loosened
-   housing.pin_1        0.080  →   0.129    loosened a little ← held back so
-   carrier.hole_1       0.100  →   0.106    loosened a little ←   the pin fits
-   carrier.bottom_pad   0.100  →   0.098    held ← drives most of the variance
+   carrier.slot_2       0.100  →   0.257    loosened
+   housing.pin_2        0.080  →   0.177    loosened
+   housing.datum_A      0.050  →   0.201    loosened
+   carrier.weld_pad     0.060  →   0.115    loosened
+   housing.pin_1        0.080  →   0.124    loosened a little ← held back so
+   carrier.hole_1       0.100  →   0.110    loosened a little ←   the pin fits
+   carrier.bottom_pad   0.100  →   0.100    held ← drives the weld height
    ──────────────────────────────────────
-   cost                 142.5  →    43.5    (−69.5%)
-   Cpk                   1.48  →    1.33    (meets the target exactly)
-   jam rate                 10 →     730    per million (limit 1,350)
+   cost                 142.5  →    46.2    (−67.5%)
+   Cpk, weld height      1.48  →    1.33    (meets the target exactly)
+   Cpk, Y alignment      2.25  →    1.33    (meets the target exactly)
+   jam rate                 10 →     710    per million (limit 1,350)
 ```
 
-The jam rate is re-checked on 100,000 fresh simulated builds the optimizer never saw. Without the fit constraint (`--no-fit-check`) the optimizer cuts cost by 79.7%, but it does so by loosening the locating pin and hole until 44% of builds jam. The worst-case band of the optimized design is ±0.156 mm, just past the ±0.15 spec. That's expected when you design to a statistical $C_{pk}$ instead of worst case.
+The jam rate is re-checked on 100,000 fresh simulated builds the optimizer never saw. Without the fit constraint (`--no-fit-check`) the optimizer cuts cost by 74.9%, but it does so by loosening the locating pin and hole until 38% of builds jam. Both worst-case bands of the optimized design fall outside spec (±0.154 mm on the weld height against ±0.15). That's expected when you design to a statistical $C_{pk}$ instead of worst case.
 
 ### 6. How it finds the answer quickly
 
