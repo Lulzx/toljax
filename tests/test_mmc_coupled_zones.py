@@ -14,63 +14,54 @@ from toljax.core.torsor import (
 )
 
 
-def test_symmetric_3disk_cylinder_containment_and_extrapolation_symmetry():
-    """Verify the 7-DOF symmetric 3-disk map stays inside both t_eff and t_orient
-    and reaches symmetric extremes at both +z and -z extrapolations.
+def test_symmetric_3disk_cylinder_variance_and_extrapolation_symmetry():
+    """Verify the 7-DOF refined map gives each endpoint the full t_eff / 2 positional spread
+    (not a smaller one from summing two independent disks), a tilt spread matching the
+    unrefined form with t_eff -> t_o, continuity with the unrefined map at t_o = t_eff, and
+    symmetric extremes at both +z and -z extrapolations.
     """
     r_mid = 2.997
     t_size = 0.012
     t_pos = 0.10
-    t_orient = 0.04
+    t_orient = 0.05  # t_o = t_eff / 2: the case where the old weights lost a factor sqrt(2)
     lz = 10.0
+    sigma_u = 1.0 / 3.0
 
-    rng = np.random.default_rng(7)
-    for _ in range(200):
-        # Sample u1, u2, u3 inside unit disks and z_size in [-1, 1]
-        u = []
-        for _ in range(3):
-            r = np.sqrt(rng.uniform(0.0, 1.0))
-            phi = rng.uniform(0.0, 2.0 * np.pi)
-            u.extend([r * np.cos(phi), r * np.sin(phi)])
-        z_size = rng.uniform(-1.0, 1.0)
-        z_feat = jnp.array(u + [z_size], dtype=jnp.float64)
-
+    def endpoints(z_feat, t_o, n_latent):
         xi, _ = map_cylinder_torsor_symmetric(
-            z_feat,
-            r_mid=r_mid,
-            t_size=t_size,
-            t_pos=t_pos,
-            t_orient=t_orient,
-            lz=lz,
-            modifier="RFS",
-            is_external=True,
-            mmc_mode="acceptance_truncated",
+            z_feat, r_mid, t_size, t_pos, t_o, lz, modifier="RFS", is_external=True
         )
-        tx, ty, _, dx, dy, _ = [float(v) for v in xi]
-        p_top = np.array([dx + 0.5 * lz * ty, dy - 0.5 * lz * tx])
-        p_bot = np.array([dx - 0.5 * lz * ty, dy + 0.5 * lz * tx])
+        tx, ty, dx, dy = xi[..., 0], xi[..., 1], xi[..., 3], xi[..., 4]
+        p_top = jnp.stack([dx + 0.5 * lz * ty, dy - 0.5 * lz * tx], axis=-1)
+        p_bot = jnp.stack([dx - 0.5 * lz * ty, dy + 0.5 * lz * tx], axis=-1)
+        return p_top, p_bot
 
-        assert np.linalg.norm(p_top) <= 0.5 * t_pos + 1e-14
-        assert np.linalg.norm(p_bot) <= 0.5 * t_pos + 1e-14
-        assert np.linalg.norm(p_top - p_bot) <= t_orient + 1e-14
+    # Linear map, so the exact covariance is J diag(sigma_u^2) J^T
+    z0 = jnp.zeros(7, dtype=jnp.float64)
+    J = jax.jacfwd(lambda z: jnp.concatenate(endpoints(z, t_orient, 7)))(z0)
+    cov = sigma_u**2 * J @ J.T
+    np.testing.assert_allclose(cov[0, 0], (0.5 * t_pos * sigma_u) ** 2, rtol=1e-14)  # p_top,x
+    np.testing.assert_allclose(cov[2, 2], (0.5 * t_pos * sigma_u) ** 2, rtol=1e-14)  # p_bot,x
+    var_tilt = cov[0, 0] + cov[2, 2] - 2.0 * cov[0, 2]
+    np.testing.assert_allclose(var_tilt, 2.0 * (0.5 * t_orient * sigma_u) ** 2, rtol=1e-14)
 
-    # Verify symmetric upward (+L_z) and downward (-L_z) extrapolation extremes:
-    # At s = +1.5 * L_z (mu = 1.0 beyond top) and s = -1.5 * L_z (mu = 1.0 beyond bottom),
-    # max displacement is t_pos / 2 + 1.0 * t_orient = 0.05 + 0.04 = 0.09 mm for both!
+    # Continuity: t_o -> t_eff reproduces the unrefined endpoint statistics
+    J_lim = jax.jacfwd(lambda z: jnp.concatenate(endpoints(z, t_pos, 7)))(z0)
+    J_unref = jax.jacfwd(lambda z: jnp.concatenate(endpoints(z, t_pos, 5)))(jnp.zeros(5))
+    np.testing.assert_allclose(J_lim @ J_lim.T, J_unref @ J_unref.T, atol=1e-16)
+
+    # Symmetric upward (+1.5 L_z) and downward (-1.5 L_z) extrapolation extremes
+    w_trans = 0.5 * np.sqrt(t_pos**2 - t_orient**2)
     z_top_ext = jnp.array([1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0], dtype=jnp.float64)
-    xi_top, _ = map_cylinder_torsor_symmetric(
-        z_top_ext, r_mid, t_size, t_pos, t_orient, lz
-    )
+    xi_top, _ = map_cylinder_torsor_symmetric(z_top_ext, r_mid, t_size, t_pos, t_orient, lz)
     x_at_plus_1p5 = float(xi_top[3] + 1.5 * lz * xi_top[1])
 
     z_bot_ext = jnp.array([1.0, 0.0, -1.0, 0.0, 1.0, 0.0, 0.0], dtype=jnp.float64)
-    xi_bot, _ = map_cylinder_torsor_symmetric(
-        z_bot_ext, r_mid, t_size, t_pos, t_orient, lz
-    )
+    xi_bot, _ = map_cylinder_torsor_symmetric(z_bot_ext, r_mid, t_size, t_pos, t_orient, lz)
     x_at_minus_1p5 = float(xi_bot[3] - 1.5 * lz * xi_bot[1])
 
-    np.testing.assert_allclose(x_at_plus_1p5, 0.5 * t_pos + t_orient, rtol=1e-14)
-    np.testing.assert_allclose(x_at_minus_1p5, 0.5 * t_pos + t_orient, rtol=1e-14)
+    np.testing.assert_allclose(x_at_plus_1p5, w_trans + 1.5 * t_orient, rtol=1e-14)
+    np.testing.assert_allclose(x_at_minus_1p5, x_at_plus_1p5, rtol=1e-14)
 
 
 def test_three_cone_socp_captures_orthogonal_translation_and_tilt():

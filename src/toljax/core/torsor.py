@@ -64,9 +64,14 @@ def map_cylinder_torsor_symmetric(
       - 7-DOF symmetric 3-disk orientation-refined cylinder zone (z_feat has shape [..., 7]:
         u_1(2) pure translation, u_2(2) top tilt, u_3(2) bottom tilt, z_size(1)).
 
-    For both cases:
-      p_top = ((t_eff - t_o) / 2) * u_1 + (t_o / 2) * u_2
-      p_bot = ((t_eff - t_o) / 2) * u_1 + (t_o / 2) * u_3
+    Refined case:
+      p_top = (sqrt(t_eff^2 - t_o^2) / 2) * u_1 + (t_o / 2) * u_2
+      p_bot = (sqrt(t_eff^2 - t_o^2) / 2) * u_1 + (t_o / 2) * u_3
+    The translation weight makes Var(p_top) = Var(p_bot) = (t_eff / 2)^2 Var(u), so each endpoint
+    consumes the full position zone at the same Cp as an unrefined feature, while the tilt
+    p_top - p_bot = (t_o / 2)(u_2 - u_3) matches the unrefined form with t_eff -> t_o. The map is
+    continuous with the unrefined case at t_o = t_eff. Worst-case containment is not implied by
+    |u_i| <= 1; Tier 1 uses the exact 3-cone SOCP instead.
     """
     z_size = z_feat[..., -1]
     dr = 0.25 * t_size * z_size
@@ -97,7 +102,7 @@ def map_cylinder_torsor_symmetric(
         u_1 = z_feat[..., 0:2]
         u_2 = z_feat[..., 2:4]
         u_3 = z_feat[..., 4:6]
-        w_trans = 0.5 * (t_eff - t_o)[..., None]
+        w_trans = 0.5 * jnp.sqrt(jnp.maximum(t_eff * t_eff - t_o * t_o, 0.0))[..., None]
         w_tilt = 0.5 * t_o[..., None]
         p_top = w_trans * u_1 + w_tilt * u_2
         p_bot = w_trans * u_1 + w_tilt * u_3
