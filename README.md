@@ -8,6 +8,135 @@ It replaces GUI-locked desktop plugins (Siemens 3DCS, Sigmetrix CETOL $6\sigma$)
 
 ---
 
+## What toljax Does, in Plain Terms
+
+### 1. Real parts are never exactly the size on the drawing
+
+Every factory makes parts a little off from the drawing. A tolerance is the amount of "off" that's still allowed.
+
+```text
+   Drawing says:        Factory actually makes:
+   ┌──────────┐         ┌──────────┐   ┌───────────┐   ┌─────────┐
+   │  6.000mm │         │  5.995   │   │  6.000    │   │  5.989  │
+   └──────────┘         └──────────┘   └───────────┘   └─────────┘
+                         part #1         part #2         part #3
+```
+
+That's fine for one part. The trouble starts when you bolt several parts together.
+
+### 2. Small errors add up when parts are stacked
+
+Each part's error carries into the next one, and any tilt gets magnified with distance:
+
+```text
+          tiny tilt at the base...
+                                              ...big miss at the top
+   housing ──┐                                    ▲
+   pin  ─────┼─ +0.02                             │  0.4mm off!
+   carrier ──┼─ +0.03  ╲                          │
+   busbar ───┼─ +0.01    ╲                        │
+   weld spot ┘            ╲_______________________●  ← laser weld misses
+```
+
+The example in this repo, [`examples/ev_busbar.yaml`](examples/ev_busbar.yaml), is an EV battery busbar stack. If those small errors pile up the wrong way, the welding laser misses its spot and the battery pack is scrap.
+
+### 3. The usual way to check this
+
+Engineers use expensive desktop programs (Siemens 3DCS, CETOL) to answer one question: "if I build 100,000 of these, how many fail?"
+
+```text
+   Engineer ──click──click──click──► [ $$$ GUI software ] ──► "0.3% fail"
+                                            │
+                                     can't put it in git,
+                                     can't automate it
+```
+
+### 4. First trick: describe the assembly in a text file
+
+You describe parts, tolerances and how they fit together in a YAML file, and the tool runs from the command line:
+
+```text
+   assembly.yaml ──► $ toljax run ──► report.html
+        │                               "WC:  ±0.41mm"
+        │                               "RSS: ±0.18mm"
+     git diff,                          "MC:  0.02% fail"
+     code review,
+     CI pipeline
+```
+
+This puts mechanical tolerance analysis into the same git and CI workflow software teams use.
+
+### 5. Second trick: work backwards
+
+The usual tools only answer forward questions: "here are my tolerances, will the assembly work?" toljax can also answer the backward question: "what's the **cheapest** set of tolerances that will work?"
+
+```text
+   FORWARD (normal tools):
+     tolerances ─────────────────────► does it work?
+
+   BACKWARD (toljax):
+     "I need it to work 99.99% of the time" ─────► cheapest tolerances
+```
+
+This matters because tight tolerances cost money:
+
+```text
+   cost
+    $$$│█
+       │█
+       │ █
+     $$│  ██
+       │    ███
+      $│       █████████______
+       └─────────────────────── tolerance
+        tight             loose
+     (slow machining,    (cheap, fast)
+      lots of rejects)
+```
+
+The optimizer loosens the features that barely affect the result, which saves money, and tightens only the ones that matter:
+
+```text
+   BEFORE                        AFTER optimize
+   pin_1    ±0.08  ███           pin_1    ±0.05  ████     ← matters, tighten
+   datum_A  ±0.05  ████          datum_A  ±0.20  █        ← doesn't, loosen
+   carrier  ±0.10  ██            carrier  ±0.15  █
+   ─────────────────             ─────────────────
+   cost: $$$$                    cost: $$     (same quality)
+```
+
+### 6. How it finds the answer quickly
+
+It's built on **JAX**, a library that can compute derivatives automatically: how much the final result moves when you nudge each input. That gives the optimizer a direction to move in, so it doesn't have to guess and check.
+
+```text
+   Guess-and-check:              With derivatives:
+     try ● ● ● ● ● ●               ●──►──►──►★
+     ● ● ● ● ● ● ●                 (follows the downhill slope
+     ● ● ● ★ ● ● ●                  straight to the answer)
+     thousands of runs             a few steps, milliseconds
+```
+
+### 7. Why it's hard to build
+
+- **3D rotations are awkward.** Rotation math tends to break (divide by zero) exactly when a part is perfectly aligned, which is the most common case. `core/se3.py` is written to avoid that.
+- **Parts settle into place.** A pin in a hole has slop, so the tool has to solve where each part actually ends up and still get derivatives through that solve. `core/solver.py` does this with the implicit function theorem.
+- **It follows the real standard.** The tolerance zones follow ASME Y14.5, the rulebook used on real engineering drawings, including bonus tolerance when a pin is undersized (MMC).
+- **It gives four answers.** Worst case, a fast statistical estimate (RSS), a more accurate second-order estimate (SOTA), and a full simulation of many virtual builds (Monte Carlo). They should agree with each other.
+- **It's checked against known results.** The tests in `tests/` compare it to published academic benchmarks and to closed-form answers.
+
+### In one line
+
+```text
+   ┌─────────────────────────────────────────────────────────────┐
+   │  It does the job of expensive desktop GD&T tools as code,   │
+   │  and also tells you the cheapest tolerances that will still │
+   │  give a working product.                                    │
+   └─────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Architecture Overview
 
 ```text
